@@ -1,0 +1,50 @@
+#lang racket
+
+; list of valid ranks and suits for cards
+; A card is represented as a pair of rank and suit
+(define ranks (cons 'ace (append (range 2 11) '(jack queen king))))
+(define suits '(hearts spades diamonds clubs))
+
+(define (values lst)
+  (map value lst))
+(define (value card)
+  (let ([rank (car card)])
+    (cond
+      [(symbol? rank) (cond
+                        [(eq? rank 'ace) 1]
+                        [else 10])]
+      [else rank])))
+
+; generate a new deck in sorted order
+(define (new-deck)
+  (foldl (lambda (suit lst)
+           (append lst (map
+                        (lambda (rank) (cons rank suit))
+                        ranks)))
+         '() suits))
+
+; generate a random hand of n cards for testing purposes
+(define (new-hand size) (take (shuffle (new-deck)) size))
+
+(define (rank-compare a b)
+  (< (index-of ranks (car a)) (index-of ranks (car b))))
+(define (suit-compare a b)
+  (< (index-of suits (cdr a)) (index-of suits (cdr b))))
+(define (card-compare a b)
+  (let ([rankdif (- (index-of ranks (car a))
+                    (index-of ranks (car b)))])
+      (or (< rankdif 0) (and (= rankdif 0) (suit-compare a b)))))
+
+
+
+(define (count-15s hand)
+  (foldl
+   (lambda (sublist tally)
+     (if (eq? (foldl + 0 sublist) 15)
+         (add1 tally)
+         tally))
+   0
+   ; the combinations function returns all sublists of a list
+   ; AKA it takes the powerset
+   (combinations (values hand))))
+
