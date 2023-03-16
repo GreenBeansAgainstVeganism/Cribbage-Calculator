@@ -151,20 +151,37 @@
 ; 4 others.
 (define (count-flush hand)
   (let ([hand-suits (map cdr hand)])
-  ; test for flushes of all four suits and add the results
-  (foldl
-   (lambda (suit total)
-     (let ([n (count (curry eq? suit) hand-suits)])
-       (+ total
-          (if (> n 4) n 0))))
-   0
-   suits)))
+    ; test for flushes of all four suits and add the results
+    (foldl
+     (lambda (suit total)
+       (let ([n (count (curry eq? suit) hand-suits)])
+         (+ total
+            (if (> n 4) n 0))))
+     0
+     suits)))
 
+; checks whether the hand contains the jack of the same suit
+; as the cut card. If cut is not specified, then it uses the
+; first element of hand as the cut card.
+(define right-jack?
+  (case-lambda
+    [(hand)
+     (list? (member
+             (cons 'jack (cdar hand))
+             (cdr hand)))]
+    [(hand cut)
+     (list? (member
+             (cons 'jack (cdr cut))
+             hand))]))
 
-(define (count-points hand)
+; calculates the total of all types of points for a hand.
+; set includes-cut? to true to factor in cut-specific points
+; like the right jack
+(define (count-points hand #:cut? [includes-cut? #f])
   (+ (* 2 (count-15s hand))
      (* 2 (count-pairs hand))
      (count-flush hand)
+     (if (and includes-cut? (right-jack? hand)) 1 0)
      (foldl
       (lambda (item total) (+ total (* (car item) (cdr item))))
       0
@@ -181,8 +198,8 @@
 ; A random cut card is also added to the hand.
 ; if do-print? is set to false, the function will instead print nothing
 ; and just return the total point value
-(define (test-random size #:p [do-print? #t])
-  (let ([hand (new-hand (add1 size))])
+(define (test-random size [cribnum 0] #:p [do-print? #t] #:data [deck (shuffle (new-deck))])
+  (let ([hand (take deck (add1 size))])
     (if do-print?
         (myprint "hand:" (cdr hand)
                  "cut:" (car hand)
@@ -192,8 +209,9 @@
                  "pairs:" (count-pairs hand)
                  "runs:" (count-runs hand)
                  "flush:" (count-flush hand)
-                 "total points:" (count-points hand))
-        (count-points hand))))
+                 "right jack:" (right-jack? hand)
+                 "total points:" (count-points hand #:cut? #t))
+        (count-points hand #:cut? #t))))
 (define test-r test-random) ; alias
 
 ; Generate a random hand of a given size + cribnum extra cards,
@@ -202,8 +220,8 @@
 ; A random cut card is also added to the hand.
 ; if do-print? is set to false, the function will instead print nothing
 ; and just return the total point value
-(define (test-most-points-kept size cribnum #:p [do-print? #t])
-  (let* ([hand (new-hand (+ 1 size cribnum))]
+(define (test-most-points-kept size cribnum #:p [do-print? #t] #:data [deck (shuffle (new-deck))])
+  (let* ([hand (take deck (+ 1 size cribnum))]
          [kept
           (car (foldl
                 (lambda (candidate hiscore)
@@ -227,22 +245,76 @@
          "pairs:" (count-pairs final-hand)
          "runs:" (count-runs final-hand)
          "flush:" (count-flush final-hand)
-         "total points:" (count-points final-hand))
-        (count-points final-hand))
+         "right jack:" (right-jack? kept (car hand))
+         "total points:" (count-points final-hand #:cut? #t))
+        (count-points final-hand #:cut? #t))
     ))
 (define test-mpk test-most-points-kept) ; alias
+
+
+; Generate a random hand of a given size + cribnum extra cards,
+; Then pick cribnum cards to throw away based on what would
+; yield the highest expected score when considering possible cut cards.
+; A random cut card is also added to the hand.
+; if do-print? is set to false, the function will instead print nothing
+; and just return the total point value
+(define (test-best-expected-cut size cribnum #:p [do-print? #t] #:data [deck (shuffle (new-deck))])
+  ; Helper method to determine the expected score of a hand given a
+  ; random cut card from draw-pile
+  (define (expected-score hand draw-pile)
+    (/
+     (foldl (lambda (cut total)
+              (+ total
+                 (count-points (cons cut hand) #:cut? #t)))
+            0 draw-pile)
+     (length draw-pile)))
+  (let*-values ([(hand draw-pile) (split-at deck (+ size cribnum))]
+                [(kept)
+                 (car (foldl
+                       (lambda (candidate hiscore)
+                         ; choose the highest scoring hand
+                         (let ([expected
+                                ; Calculate expected value of the hand score
+                                ; with respect to the cut card
+                                (expected-score candidate draw-pile)])
+                           (if (> expected (cdr hiscore))
+                               (cons candidate expected)
+                               hiscore)))
+                       '(() . 0)
+                       (combinations hand size)))]
+                [(final-hand) (cons (car draw-pile) kept)])
+    (if do-print?
+        (myprint
+         "hand:" hand
+         "kept:" kept
+         "kept points:" (count-points kept)
+         "expected score:" (~r (expected-score kept draw-pile))
+         "cut:" (car draw-pile)
+         "sorted:" (sort final-hand card-compare)
+         ""
+         "15's:" (count-15s final-hand)
+         "pairs:" (count-pairs final-hand)
+         "runs:" (count-runs final-hand)
+         "flush:" (count-flush final-hand)
+         "right jack:" (right-jack? kept (car draw-pile))
+         "total points:" (count-points final-hand #:cut? #t))
+        (count-points final-hand #:cut? #t))
+    ))
+(define test-bec test-best-expected-cut) ; alias
     
-; Run a specific test n times and return the average number of points
+; Run a specific test n times and print results
 (define (bulk-test n test . args)
   (let* ([data
           (build-list
            n
            (lambda (junk) (apply test args #:p #f)))]
          [data-frame (make-data-frame)]
-         [results (samples->hash data)])
+         [results (samples->hash data)]
+         [test-title (~a test)])
     
      
     (myprint
+     test-title
      "results: " results
      "mean:" (~r (mean data))
      "variance:" (~r (variance data))
@@ -254,7 +326,55 @@
       (graph #:data data-frame
              #:mapping (aes #:x "scores" #:y "frequencies")
              #:x-min 0 #:width 800
+             #:title test-title
              (col)
              ))))
+
+; transpose a 2d list, e.g.
+; ((1 2 3) (4 5 6) (7 8 9)) -> ((1 4 7) (2 5 8) (3 6 9))
+; all sublists must be same length
+(define (transpose lst)
+  (foldl
+   (lambda (subl new-lst)
+     (map cons subl new-lst))
+   (make-list (length (car lst)) '())
+   (reverse lst)))
+
+; Run multiple tests n times on the same set of test cases and print results
+(define (multi-test n tests . args)
+  (let ([data-set
+         (transpose (build-list
+                     n
+                     (lambda (junk)
+                       (let ([test-case (shuffle (new-deck))])
+                         (map
+                          (lambda (test) (apply test args
+                                                #:p false #:data test-case))
+                          tests)))))])
+    (map (lambda (data test)
+           (let ([data-frame (make-data-frame)]
+                 [results (samples->hash data)]
+                 [test-title (~a test)])
+            
+             (myprint
+              test-title
+              "results: " results
+              "mean:" (~r (mean data))
+              "variance:" (~r (variance data))
+              "stddev:" (~r (stddev data))
+              "")
+             
+    
+             (let-values ([(scores frequencies) (count-samples data)])
+               (df-add-series! data-frame (make-series "scores" #:data (list->vector scores)))
+               (df-add-series! data-frame (make-series "frequencies" #:data (list->vector frequencies)))
+               (graph #:data data-frame
+                      #:mapping (aes #:x "scores" #:y "frequencies")
+                      #:x-min 0 #:width 800
+                      #:title test-title
+                      (col)
+                      ))
+             ))
+         data-set tests)))
 
 ; testing
